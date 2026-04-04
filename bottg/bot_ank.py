@@ -11,10 +11,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ========== НАСТРОЙКИ ==========
-# Токен берется из переменных окружения (настройки Render)
+# Токен берется из переменных окружения (настройки Bothost)
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# ТВОИ ДАННЫЕ (оставь как есть, они уже правильные):
+# ТВОИ ДАННЫЕ:
 ADMIN_ID = 6313154469
 CHAT_LINK = "https://t.me/elysiumchatick"
 PAYMENT_LINK = "https://www.donationalerts.com/r/spalow1"
@@ -231,12 +231,12 @@ async def list_applications(message: types.Message):
     text = "📋 Последние 10 заявок:\n\n"
     for app in recent:
         status_emoji = {"accepted": "✅", "rejected": "❌", "pending": "⏳"}.get(app["status"], "❓")
-        text += f"{status_emoji} *{app['nick']}* (ID: {app['id'][:8]})\n"
+        text += f"{status_emoji} {app['nick']} (ID: {app['id'][:8]})\n"
         text += f"   Возраст: {app['age']}\n"
         text += f"   Статус: {app['status']}\n"
         text += f"   Дата: {datetime.fromisoformat(app['created_at']).strftime('%d.%m.%Y %H:%M')}\n\n"
     
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text)
 
 async def main():
     if not os.path.exists(APPLICATIONS_FILE):
