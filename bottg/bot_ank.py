@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 from mcipc.rcon import Client
 
 # ========== НАСТРОЙКИ ==========
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = os.environ.get("8726993851:AAEhvlW38fO1bbuUPgGn_YPzjFTLciGnL40")
 
 ADMIN_ID = 6313154469
 CHAT_LINK = "https://t.me/elysiumchatick"
