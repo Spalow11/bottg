@@ -12,7 +12,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8726993851:AAEhvlW38fO1bbuUPgGn_YPzjFTLciGnL40"
 ADMIN_ID = 6313154469
-CHAT_LINK = "https://t.me/elysiumchatick"
+CHAT_LINK = "https://t.me/+PvAJvdinyNYwZDQy"
 PAYMENT_LINK = "https://www.donationalerts.com/r/spalow1"
 
 # Информация о сервере
@@ -25,9 +25,9 @@ ABOUT_SERVER = """
 • Регулярные ивенты и конкурсы
 • Активная администрация
 
-🎮 *Версия:* 1.20.4
-🌍 *IP:* elysium.minecraft.ru
-
+🎮 *Версия:* ?
+🌍 *IP:* ?
+🗓️ *Дата открытие:* 18.04
 Присоединяйся к нам и стань частью нашего мира! 🚀
 """
 
