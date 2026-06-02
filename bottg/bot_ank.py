@@ -12,7 +12,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8726993851:AAEhvlW38fO1bbuUPgGn_YPzjFTLciGnL40"
-ADMIN_ID = 5934335006
+ADMIN_ID = 6313154469
 CHAT_LINK = "https://t.me/+PvAJvdinyNYwZDQy"
 PAYMENT_LINK = "https://www.donationalerts.com/r/spalow1"
 
