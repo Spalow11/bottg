@@ -1,2 +1,2 @@
-aiogram
-mcipc
+
+python-telegram-bot>=21,<23
