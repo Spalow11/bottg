@@ -1,388 +1,483 @@
-import asyncio
-import json
+
+import logging
+import sqlite3
 import os
-import re
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
-# ========== НАСТРОЙКИ ==========
-BOT_TOKEN = "8726993851:AAEhvlW38fO1bbuUPgGn_YPzjFTLciGnL40"
-ADMIN_ID = 6313154469
-CHAT_LINK = "https://t.me/+PvAJvdinyNYwZDQy"
-PAYMENT_LINK = "https://www.donationalerts.com/r/spalow1"
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.constants import ChatMemberStatus
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-# Функция для экранирования Markdown
-def escape_md(text: str) -> str:
-    if not text:
-        return ""
-    special_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(f'([{re.escape(special_chars)}])', r'\\\1', text)
+# ================= НАСТРОЙКИ =================
 
-# Информация о сервере
-ABOUT_SERVER = """
-🏰 О сервере Elysium
+BOT_TOKEN = os.getenv("BOT_TOKEN", "9187444592:AAFjbwPjET4hAK8CEp8UlWJw7CUYy45ZvTU")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6313154469"))
 
-✨ Особенности:
-• Приватный сервер с дружным комьюнити
-• Уникальная экономика и кастомные предметы
-• Регулярные ивенты и конкурсы
-• Активная администрация
+CHANNEL = "@elysiumvanila"
+CHANNEL_URL = "https://t.me/elysiumvanila"
+GROUP_URL = "https://t.me/+B5tj8rpwYVZiY2My"
+DONATE_URL = "https://www.donationalerts.com/r/spalow1"
 
-🎮 Версия: 26.1.2
-🌍 IP: 94.26.248.5:32401
+SERVER_IP = "elysium.mc-join.me"
+SERVER_VERSION = "26.1.2"
+PASS_PRICE = "50 ₽"
+
+DB_NAME = "applications.db"
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
+
+# ================= БАЗА ДАННЫХ =================
 
 
-Присоединяйся к нам и стань частью нашего мира! 🚀
-"""
+def init_db():
+    with sqlite3.connect(DB_NAME) as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                answers TEXT NOT NULL,
+                status TEXT DEFAULT 'pending'
+            )
+        """)
 
-# ========== ЕДИНЫЙ ДОНАТ ==========
-DONATION = {
-    "name": "💎 Спонсорка",
-    "description": "▸ Поддержка сервера\n▸ Доступ на сервер\n▸ Привилегии и бонусы(админу в лс писать)\n▸ Отдельная роль в Discord",
-    "price": "499 ₽",
-    "type": "месяц",
-    "link": "https://www.donationalerts.com/r/spalow1?amount=499"
-}
-# =================================
 
-bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
+# ================= ВОПРОСЫ =================
 
-APPLICATIONS_FILE = "applications.json"
-USERS_FILE = "users.json"
+QUESTIONS = [
+    "🎮 **Какой у тебя ник в Minecraft?**",
+    "🎂 **Сколько тебе лет?**",
+    "📢 **Откуда ты узнал о сервере ELYSIUM?**",
+    "📜 **Ты ознакомился с правилами сервера?**",
+    "🌌 **Почему ты хочешь играть именно на ELYSIUM?**",
+]
 
-# Функции для работы с пользователями
-def save_user(user_id: int, username: str = None, first_name: str = None):
-    users = load_users()
-    for user in users:
-        if user["id"] == user_id:
-            user["last_seen"] = datetime.now().isoformat()
-            save_users(users)
-            return
-    users.append({
-        "id": user_id,
-        "username": username or f"user_{user_id}",
-        "first_name": first_name or "Unknown",
-        "first_seen": datetime.now().isoformat(),
-        "last_seen": datetime.now().isoformat()
-    })
-    save_users(users)
+RULES_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("✅ Да", callback_data="rules_yes"),
+        InlineKeyboardButton("❌ Нет", callback_data="rules_no"),
+    ]
+])
 
-def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
 
-def save_users(users):
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
+# ================= ПОДПИСКА =================
 
-def load_applications():
-    if os.path.exists(APPLICATIONS_FILE):
-        with open(APPLICATIONS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
 
-def save_application(application_data):
-    applications = load_applications()
-    applications.append(application_data)
-    with open(APPLICATIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(applications, f, ensure_ascii=False, indent=2)
+async def is_subscribed(bot, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(CHANNEL, user_id)
+        return member.status in (
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER,
+        )
+    except Exception:
+        logger.exception("Не удалось проверить подписку")
+        return False
 
-def update_application_status(application_id, status):
-    applications = load_applications()
-    for app in applications:
-        if app["id"] == application_id:
-            app["status"] = status
-            app["reviewed_at"] = datetime.now().isoformat()
-            break
-    with open(APPLICATIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(applications, f, ensure_ascii=False, indent=2)
 
-# Клавиатуры
-def get_main_keyboard():
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🏰 О сервере")],
-            [KeyboardButton(text="📝 Заявка")],
-            [KeyboardButton(text="💎 Спонсорка")]
-        ],
-        resize_keyboard=True
-    )
-    return keyboard
-
-def get_donation_keyboard():
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💸 Оплатить {DONATION['price']}", url=DONATION['link'])],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")]
-    ])
-    return keyboard
-
-def admin_kb(user_id: int, app_id: str):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Принять", callback_data=f"accept_{user_id}_{app_id}")],
-        [InlineKeyboardButton(text="❌ Отказать", callback_data=f"reject_{user_id}_{app_id}")],
-        [InlineKeyboardButton(text="📋 История", callback_data=f"history_{user_id}")],
-        [InlineKeyboardButton(text="📋 Скопировать ник", callback_data=f"copy_nick_{user_id}_{app_id}")]
+def subscription_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "📢 Подписаться на канал",
+            url=CHANNEL_URL
+        )],
+        [InlineKeyboardButton(
+            "🔄 Проверить подписку",
+            callback_data="check_subscription"
+        )],
     ])
 
-class Form(StatesGroup):
-    nick = State()
-    age = State()
-    source = State()
-    plans = State()
-    about = State()
 
-# ========== ОБРАБОТЧИКИ ==========
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    await message.answer(
-        "🎮 Добро пожаловать на сервер Elysium!\n\n"
-        "Я помогу тебе подать заявку или узнать информацию о сервере.\n\n"
-        "Используй кнопки ниже для навигации:",
-        reply_markup=get_main_keyboard()
-    )
+# ================= СТАРТ =================
 
-@dp.message(F.text == "🏰 О сервере")
-async def about_server(message: types.Message):
-    save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    await message.answer(ABOUT_SERVER, reply_markup=get_main_keyboard())
 
-@dp.message(F.text == "📝 Заявка")
-async def start_application(message: types.Message, state: FSMContext):
-    await state.clear()
-    save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    await message.answer(
-        "📝 Подача заявки\n\n"
-        "Чтобы подать заявку, заполните небольшую анкету.\n"
-        "Введите ваш никнейм:",
-        reply_markup=get_main_keyboard()
-    )
-    await state.set_state(Form.nick)
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    context.user_data.clear()
 
-@dp.message(F.text == "💎 Спонсорка")
-async def show_donation(message: types.Message):
-    save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    text = (
-        f"💎 *{DONATION['name']}*\n\n"
-        f"📦 *Что даёт:*\n{DONATION['description']}\n\n"
-        f"💰 *Цена:* {DONATION['price']}\n"
-        f"📅 *Тип:* {DONATION['type']}\n\n"
-        f"Нажми на кнопку ниже, чтобы поддержать сервер:"
-    )
-    await message.answer(text, parse_mode="Markdown", reply_markup=get_donation_keyboard())
-
-@dp.callback_query(F.data == "back_to_menu")
-async def back_to_menu(callback: types.CallbackQuery):
-    await callback.message.delete()
-    await callback.message.answer(
-        "🎮 Главное меню\n\nИспользуй кнопки ниже для навигации:",
-        reply_markup=get_main_keyboard()
-    )
-    await callback.answer()
-
-# ========== АНКЕТА ==========
-@dp.message(Form.nick)
-async def get_nick(message: types.Message, state: FSMContext):
-    await state.update_data(nick=message.text)
-    await message.answer("📅 Укажите ваш возраст (только число):")
-    await state.set_state(Form.age)
-
-@dp.message(Form.age)
-async def get_age(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("Пожалуйста, введите число (ваш возраст):")
-        return
-    await state.update_data(age=message.text)
-    await message.answer("🔍 Откуда узнали о сервере? (реклама, друг, тикток и т.д.):")
-    await state.set_state(Form.source)
-
-@dp.message(Form.source)
-async def get_source(message: types.Message, state: FSMContext):
-    await state.update_data(source=message.text)
-    await message.answer("🛠 Чем планируете заниматься на сервере? (строительство, PvP, фермы и т.д.):")
-    await state.set_state(Form.plans)
-
-@dp.message(Form.plans)
-async def get_plans(message: types.Message, state: FSMContext):
-    await state.update_data(plans=message.text)
-    await message.answer("📝 Немного о себе (расскажите о своих интересах, опыте игры):")
-    await state.set_state(Form.about)
-
-@dp.message(Form.about)
-async def get_about(message: types.Message, state: FSMContext):
-    await state.update_data(about=message.text)
-    data = await state.get_data()
-    
-    app_id = f"{message.from_user.id}_{datetime.now().timestamp()}"
-    username = message.from_user.username or f"user_{message.from_user.id}"
-    
-    safe_username = escape_md(username)
-    safe_nick = escape_md(data['nick'])
-    safe_age = escape_md(data['age'])
-    safe_source = escape_md(data['source'])
-    safe_plans = escape_md(data['plans'])
-    safe_about = escape_md(data['about'])
-    
-    application_record = {
-        "id": app_id,
-        "user_id": message.from_user.id,
-        "username": f"@{username}" if message.from_user.username else str(message.from_user.id),
-        "nick": data['nick'],
-        "age": int(data['age']),
-        "source": data['source'],
-        "plans": data['plans'],
-        "about": data['about'],
-        "created_at": datetime.now().isoformat(),
-        "status": "pending",
-        "reviewed_at": None
-    }
-    
-    save_application(application_record)
-    
-    # Отправляем заявку админу
-    application_text = (
-        f"📬 НОВАЯ ЗАЯВКА!\n"
-        f"🆔 ID: `{app_id[:8]}...`\n\n"
-        f"👤 Ник: {safe_nick}\n"
-        f"🎂 Возраст: {safe_age}\n"
-        f"🔍 Откуда узнал: {safe_source}\n"
-        f"🛠 Планы: {safe_plans}\n"
-        f"📖 О себе: {safe_about}\n\n"
-        f"👥 ID игрока: `{message.from_user.id}`\n"
-        f"👥 Username: @{username}"
-    )
-    
-    await bot.send_message(
-        ADMIN_ID,
-        application_text,
+    await update.message.reply_text(
+        "🌌 **ELYSIUM — заявка на сервер**\n\n"
+        "Добро пожаловать!\n"
+        "Чтобы попасть на сервер, заполни небольшую анкету.\n\n"
+        "Сначала подпишись на наш Telegram-канал:",
+        reply_markup=subscription_keyboard(),
         parse_mode="Markdown",
-        reply_markup=admin_kb(message.from_user.id, app_id)
     )
-    
-    await message.answer(
-        "✅ Ваша заявка отправлена на рассмотрение!\n"
-        "Ожидайте ответа в этом чате.",
-        reply_markup=get_main_keyboard()
-    )
-    await state.clear()
 
-# ========== ОБРАБОТКА РЕШЕНИЙ ==========
-@dp.callback_query(F.data.startswith("accept_"))
-async def accept_user(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    user_id = int(parts[1])
-    app_id = parts[2]
-    
-    await callback.answer()
-    update_application_status(app_id, "accepted")
-    
-    try:
-        await bot.send_message(
-            user_id,
-            f"🎉 Поздравляем! Вы были приняты на сервер Elysium!\n\n"
-            f"Присоединяйтесь к нашему чату: {CHAT_LINK}\n"
-            f"Добро пожаловать и приятной игры! 🚀"
-        )
-        await callback.message.edit_text(
-            callback.message.text + "\n\n✅ РЕШЕНИЕ: ПРИНЯТ"
-        )
-    except Exception as e:
-        await callback.message.answer(f"❌ Ошибка: {e}")
 
-@dp.callback_query(F.data.startswith("reject_"))
-async def reject_user(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    user_id = int(parts[1])
-    app_id = parts[2]
-    
-    await callback.answer()
-    update_application_status(app_id, "rejected")
-    
-    try:
-        await bot.send_message(
-            user_id,
-            f"😔 Вам было отказано в бесплатном доступе.\n\n"
-            f"Но вы можете приобрести проходку на сервер:\n"
-            f"👉 {PAYMENT_LINK}\n\n"
-            f"После оплаты вы сразу получите доступ."
-        )
-        await callback.message.edit_text(
-            callback.message.text + "\n\n❌ РЕШЕНИЕ: ОТКАЗАНО"
-        )
-    except Exception as e:
-        await callback.message.answer(f"❌ Ошибка: {e}")
+async def check_subscription(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+    await query.answer()
 
-@dp.callback_query(F.data.startswith("copy_nick_"))
-async def copy_nick(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    user_id = int(parts[2])
-    app_id = parts[3]
-    
-    # Находим заявку
-    applications = load_applications()
-    nick = None
-    for app in applications:
-        if app["id"] == app_id:
-            nick = app["nick"]
-            break
-    
-    if nick:
-        await callback.message.answer(
-            f"📋 *Ник для копирования:*\n"
-            f"`{nick}`\n\n"
-            f"Выделите ник выше и скопируйте (Ctrl+C или долгое нажатие)",
-            parse_mode="Markdown"
+    if not await is_subscribed(
+        context.bot, query.from_user.id
+    ):
+        await query.message.reply_text(
+            "❌ Подписка не найдена.\n"
+            "Подпишись на канал и нажми проверку ещё раз.",
+            reply_markup=subscription_keyboard(),
         )
-        await callback.answer("✅ Ник отправлен!")
-    else:
-        await callback.answer("❌ Ник не найден")
-
-@dp.callback_query(F.data.startswith("history_"))
-async def show_user_history(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[1])
-    await callback.answer()
-    
-    applications = load_applications()
-    user_apps = [app for app in applications if app["user_id"] == user_id]
-    
-    if not user_apps:
-        await callback.message.answer("📭 У этого пользователя нет заявок.")
         return
-    
-    text = f"📋 История заявок:\n\n"
-    for app in user_apps[-5:]:
-        status_emoji = {"accepted": "✅", "rejected": "❌", "pending": "⏳"}.get(app["status"], "❓")
-        created = datetime.fromisoformat(app["created_at"]).strftime("%d.%m.%Y %H:%M")
-        text += f"{status_emoji} {app['nick']} ({app['age']} лет)\n"
-        text += f"   📅 {created}\n"
-        text += f"   Статус: {app['status']}\n\n"
-    
-    await callback.message.answer(text)
 
-# ========== ЗАПУСК ==========
-async def main():
-    if not os.path.exists(APPLICATIONS_FILE):
-        with open(APPLICATIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump([], f)
-    
-    if not os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump([], f)
-    
-    print("✅ Бот для сервера Elysium запущен!")
-    print(f"👑 Админ: {ADMIN_ID}")
-    print(f"💬 Чат: {CHAT_LINK}")
-    await dp.start_polling(bot)
+    await query.message.reply_text(
+        "✅ Подписка подтверждена!\n\n"
+        "Начинаем заполнение анкеты.\n"
+        "Отвечай на вопросы по очереди.\n\n"
+        + QUESTIONS[0],
+        parse_mode="Markdown",
+    )
+
+    context.user_data["answers"] = []
+    context.user_data["question"] = 0
+    context.user_data["stage"] = "answer"
+
+
+# ================= ОТВЕТЫ =================
+
+
+async def handle_answer(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+    text = update.message.text.strip()
+
+    if context.user_data.get("stage") != "answer":
+        await update.message.reply_text(
+            "Нажми /start, чтобы начать заполнение анкеты."
+        )
+        return
+
+    index = context.user_data["question"]
+
+    if not text:
+        await update.message.reply_text(
+            "Пожалуйста, введи ответ текстом."
+        )
+        return
+
+    if index == 0 and len(text) > 32:
+        await update.message.reply_text(
+            "Ник слишком длинный. Введи ник Minecraft ещё раз."
+        )
+        return
+
+    if index == 1:
+        try:
+            age = int(text)
+            if not 1 <= age <= 99:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text(
+                "Укажи возраст числом."
+            )
+            return
+
+    context.user_data["answers"].append(text)
+    index += 1
+
+    if index < len(QUESTIONS):
+        context.user_data["question"] = index
+
+        if index == 3:
+            await update.message.reply_text(
+                QUESTIONS[index],
+                reply_markup=RULES_KEYBOARD,
+                parse_mode="Markdown",
+            )
+            return
+
+        await update.message.reply_text(
+            QUESTIONS[index],
+            parse_mode="Markdown",
+        )
+        return
+
+    await submit_application(update, context)
+
+
+async def rules_answer(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+    await query.answer()
+
+    if context.user_data.get("stage") != "answer":
+        await query.message.reply_text(
+            "Эта анкета уже не активна. Нажми /start."
+        )
+        return
+
+    choice = query.data
+
+    if choice == "rules_no":
+        await query.message.reply_text(
+            "Сначала ознакомься с правилами сервера. "
+            "После этого можешь начать анкету заново: /start"
+        )
+        context.user_data.clear()
+        return
+
+    context.user_data["answers"].append("Да, ознакомился")
+    context.user_data["question"] = 4
+
+    await query.message.reply_text(
+        QUESTIONS[4],
+        parse_mode="Markdown",
+    )
+
+
+# ================= ОТПРАВКА ЗАЯВКИ =================
+
+
+async def submit_application(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+    answers = context.user_data.get("answers", [])
+
+    if len(answers) != len(QUESTIONS):
+        await update.effective_message.reply_text(
+            "Анкета заполнена не полностью. Нажми /start."
+        )
+        return
+
+    username = (
+        f"@{user.username}" if user.username
+        else "Нет username"
+    )
+
+    with sqlite3.connect(DB_NAME) as db:
+        cursor = db.execute(
+            """
+            INSERT INTO applications
+            (user_id, username, answers, status)
+            VALUES (?, ?, ?, 'pending')
+            """,
+            (user.id, username, "\n".join(answers)),
+        )
+        app_id = cursor.lastrowid
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ Одобрить",
+                callback_data=f"approve:{app_id}",
+            ),
+            InlineKeyboardButton(
+                "❌ Отказать",
+                callback_data=f"reject:{app_id}",
+            ),
+        ]
+    ])
+
+    admin_text = (
+        f"📩 НОВАЯ ЗАЯВКА ELYSIUM №{app_id}\n\n"
+        f"👤 Telegram: {username}\n"
+        f"🆔 Telegram ID: {user.id}\n"
+        f"🔗 Профиль: tg://user?id={user.id}\n\n"
+        f"🎮 Ник Minecraft: {answers[0]}\n"
+        f"🎂 Возраст: {answers[1]}\n"
+        f"📢 Источник: {answers[2]}\n"
+        f"📜 Правила: {answers[3]}\n"
+        f"🌌 Почему ELYSIUM: {answers[4]}\n"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_text,
+            reply_markup=keyboard,
+        )
+    except Exception:
+        logger.exception("Не удалось отправить заявку админу")
+        with sqlite3.connect(DB_NAME) as db:
+            db.execute(
+                "UPDATE applications SET status='delivery_error' WHERE id=?",
+                (app_id,),
+            )
+        await update.effective_message.reply_text(
+            "Не удалось передать заявку администрации. "
+            "Попробуй позже через /start."
+        )
+        context.user_data.clear()
+        return
+
+    context.user_data.clear()
+
+    await update.effective_message.reply_text(
+        "🎉 Анкета успешно отправлена!\n\n"
+        "Администрация рассмотрит её и пришлёт ответ сюда.\n"
+        "Пока ожидаешь, можешь оставаться на связи с ELYSIUM."
+    )
+
+
+# ================= РЕШЕНИЕ АДМИНА =================
+
+
+async def review_application(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+
+    if query.from_user.id != ADMIN_ID:
+        await query.answer(
+            "У тебя нет прав для этого действия.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+
+    action, app_id_text = query.data.split(":")
+    app_id = int(app_id_text)
+
+    with sqlite3.connect(DB_NAME) as db:
+        row = db.execute(
+            """
+            SELECT user_id, status
+            FROM applications WHERE id=?
+            """,
+            (app_id,),
+        ).fetchone()
+
+        if row is None:
+            await query.message.reply_text(
+                "Заявка не найдена в базе."
+            )
+            return
+
+        user_id, status = row
+
+        if status != "pending":
+            await query.message.reply_text(
+                f"Заявка уже обработана: {status}"
+            )
+            return
+
+        new_status = (
+            "approved" if action == "approve" else "rejected"
+        )
+
+        db.execute(
+            "UPDATE applications SET status=? WHERE id=?",
+            (new_status, app_id),
+        )
+
+    if action == "approve":
+        message = (
+            "🎉 **Твоя заявка на ELYSIUM одобрена!**\n\n"
+            "Добро пожаловать на сервер!\n\n"
+            f"🎮 IP: `{SERVER_IP}`\n"
+            f"🧩 Версия: `{SERVER_VERSION}`\n\n"
+            f"💬 Вступай в чат: {GROUP_URL}\n\n"
+            "Удачной игры!"
+        )
+    else:
+        message = (
+            "К сожалению, твоя заявка на ELYSIUM отклонена.\n\n"
+            f"Стоимость проходки — {PASS_PRICE}.\n"
+            "Если хочешь поддержать сервер и узнать о "
+            "возможности приобретения проходки, перейди сюда:\n"
+            f"{DONATE_URL}"
+        )
+
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=message,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        logger.exception(
+            "Не удалось сообщить решение пользователю %s",
+            user_id,
+        )
+        await query.message.reply_text(
+            "Решение сохранено, но бот не смог написать игроку. "
+            "Возможно, он не запускал бота или заблокировал его."
+        )
+        return
+
+    await query.edit_message_reply_markup(
+        reply_markup=None
+    )
+
+    await query.message.reply_text(
+        f"✅ Заявка №{app_id}: "
+        f"{'одобрена' if action == 'approve' else 'отклонена'}."
+    )
+
+
+# ================= ЗАПУСК =================
+
+
+def main():
+    if BOT_TOKEN == "ВСТАВЬ_ТОКЕН_ОТ_BOTFATHER":
+        raise RuntimeError(
+            "Вставь токен бота в BOT_TOKEN."
+        )
+
+    if ADMIN_ID == 123456789:
+        raise RuntimeError(
+            "Укажи свой Telegram ID в ADMIN_ID."
+        )
+
+    init_db()
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        CallbackQueryHandler(
+            check_subscription,
+            pattern="^check_subscription$",
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            rules_answer,
+            pattern="^rules_(yes|no)$",
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            review_application,
+            pattern="^(approve|reject):\\d+$",
+        )
+    )
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_answer,
+        )
+    )
+
+    print("ELYSIUM Bot запущен!")
+    app.run_polling()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
