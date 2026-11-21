@@ -1,2 +1,3 @@
 
 python-telegram-bot>=21,<23
+aiogram>=3.13,<4
